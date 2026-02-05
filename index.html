@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Suf's Battle Simulator</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #111; color: white; user-select: none; }
+        canvas { display: block; }
+        
+        /* Menus */
+        #menu, #level-select { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 50; }
+        #level-select { display: none; }
+        .menu-btn { padding: 15px 30px; margin: 10px; font-size: 1.5rem; cursor: pointer; border: 2px solid white; background: transparent; color: white; width: 300px; text-align: center; transition: 0.3s; }
+        .menu-btn:hover { background: white; color: black; }
+        .menu-btn.locked { opacity: 0.3; cursor: not-allowed; border-color: #444; background: #222; }
+
+        /* Sidebar */
+        #sidebar { position: absolute; top: 0; left: 0; height: 100%; width: 220px; background: rgba(0,0,0,0.9); border-right: 1px solid #444; display: none; flex-direction: column; padding: 10px; box-sizing: border-box; z-index: 10; overflow-y: auto; }
+        #money-display { font-size: 1.4rem; color: #ffd700; margin-bottom: 10px; text-align: center; font-weight: bold; }
+        
+        .btn { padding: 8px; margin-bottom: 5px; cursor: pointer; border: 1px solid #555; background: #333; color: white; text-align: left; font-size: 0.85rem; border-radius: 4px; display: none; }
+        .btn.active { border-color: #0f0; background: #222; box-shadow: inset 0 0 5px #0f0; }
+        .btn.visible { display: block; }
+        
+        .action-btn { text-align: center; font-weight: bold; margin-top: 10px; display: block !important; }
+        .start-btn { background: #262; margin-top: auto; }
+        .end-btn { background: #622; display: none !important; }
+        
+        #victory-overlay { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); text-align: center; display: none; z-index: 60; pointer-events: none; }
+        #victory-text { font-size: 5rem; font-weight: bold; text-shadow: 0 0 20px black; margin-bottom: 20px; }
+        #next-lvl-btn { pointer-events: auto; display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="menu">
+        <h1 style="font-size: 4rem; letter-spacing: 5px; color: #38f;">Suf's Battle Simulator</h1>
+        <div class="menu-btn" onclick="openLevelSelect()">Campaign Mode</div>
+        <div class="menu-btn" onclick="enterSandbox()">Sandbox Mode</div>
+        <div style="margin-top: 20px; font-size: 0.8rem; color: #667; cursor: pointer;" onclick="resetProgress()">Reset All Progress</div>
+    </div>
+
+    <div id="level-select">
+        <h1>Select Level</h1>
+        <div id="level-buttons"></div>
+        <div class="menu-btn" onclick="backToMenu()" style="border-color: red; margin-top: 40px;">Back</div>
+    </div>
+
+    <div id="sidebar">
+        <div id="level-name-display" style="font-weight: bold; color: #38f; margin-bottom: 5px;"></div>
+        <div id="money-display">Money: $0</div>
+        
+        <button class="btn" id="btn-swordsman" onclick="setTool('swordsman')">Swordsman ($125)</button>
+        <button class="btn" id="btn-shieldman" onclick="setTool('shieldman')">Shieldman ($125)</button>
+        <button class="btn" id="btn-archer" onclick="setTool('archer')">Archer ($150)</button>
+        <button class="btn" id="btn-spearman" onclick="setTool('spearman')">Spearman ($160)</button>
+        <button class="btn" id="btn-rusher" onclick="setTool('rusher')">Rusher ($225)</button>
+        <button class="btn" id="btn-zombie" onclick="setTool('zombie')">Zombie ($185)</button>
+        <button class="btn" id="btn-skeleton" onclick="setTool('skeleton')">Skeleton ($135)</button>
+        <button class="btn" id="btn-knight" onclick="setTool('knight')">Knight ($550)</button>
+        <button class="btn" id="btn-necromancer" onclick="setTool('necromancer')">Necromancer ($2000)</button>
+        <button class="btn" id="btn-tower" onclick="setTool('tower')">Thunder Tower ($1000)</button>
+        <button class="btn" id="btn-giant" onclick="setTool('giant')">Giant ($1750)</button>
+
+        <hr style="width:100%; border:0; border-top:1px solid #444;">
+        <button class="btn action-btn" id="btn-delete" onclick="setTool('delete')">Delete Units</button>
+        <button class="btn action-btn start-btn" id="start-btn" onclick="startBattle()">START BATTLE</button>
+        <button class="btn action-btn end-btn" id="end-btn" onclick="endBattle()">END BATTLE</button>
+        <button class="btn action-btn" onclick="backToMenu()" style="background: #444;">Exit Level</button>
+    </div>
+
+    <div id="victory-overlay">
+        <div id="victory-text"></div>
+        <button id="next-lvl-btn" class="menu-btn" onclick="loadNextLevel()">Next Level</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+        let isSandbox = false, isBattleStarted = false, currentLevel = null;
+        let units = [], lightningLines = [], currentTool = 'swordsman';
+        let wallet = 0;
+
+        // --- PROGRESS SAVING ---
+        let unlockedLevels = parseInt(localStorage.getItem('suf_battle_progress')) || 1;
+
+        function saveProgress() {
+            localStorage.setItem('suf_battle_progress', unlockedLevels);
+        }
+
+        function resetProgress() {
+            if(confirm("Are you sure you want to reset all campaign progress?")) {
+                localStorage.setItem('suf_battle_progress', 1);
+                location.reload();
+            }
+        }
+        // -----------------------
+
+        const UNIT_DATA = {
+            swordsman: { cost: 125 }, shieldman: { cost: 125 }, archer: { cost: 150 }, 
+            spearman: { cost: 160 }, rusher: { cost: 225 }, zombie: { cost: 185 }, 
+            skeleton: { cost: 135 }, knight: { cost: 550 }, necromancer: { cost: 2000 }, 
+            tower: { cost: 1000 }, giant: { cost: 1750 }
+        };
+
+        const LEVELS = [
+            { name: "The Beginning", money: 850, allowed: ['swordsman', 'shieldman'], 
+              enemies: [{t:'shieldman', x:0.7, y:0.4}, {t:'shieldman', x:0.7, y:0.6}, {t:'swordsman', x:0.8, y:0.3}, {t:'swordsman', x:0.8, y:0.5}, {t:'swordsman', x:0.8, y:0.7}] },
+            { name: "New Weapons", money: 1250, allowed: ['swordsman', 'shieldman', 'archer', 'spearman'], 
+              enemies: [{t:'shieldman', x:0.7, y:0.4}, {t:'shieldman', x:0.7, y:0.6}, {t:'swordsman', x:0.7, y:0.5}, {t:'spearman', x:0.8, y:0.4}, {t:'spearman', x:0.8, y:0.6}, {t:'archer', x:0.9, y:0.5}] },
+            { name: "The Fast Rushers", money: 1750, allowed: ['swordsman', 'shieldman', 'archer', 'spearman', 'rusher'], 
+              enemies: [{t:'shieldman', x:0.7, y:0.3}, {t:'shieldman', x:0.7, y:0.5}, {t:'shieldman', x:0.7, y:0.7}, {t:'spearman', x:0.8, y:0.3}, {t:'spearman', x:0.8, y:0.5}, {t:'spearman', x:0.8, y:0.7}, {t:'rusher', x:0.9, y:0.3}, {t:'rusher', x:0.9, y:0.5}, {t:'rusher', x:0.9, y:0.7}] },
+            { name: "The Undead Army", money: 2000, allowed: ['swordsman', 'shieldman', 'archer', 'spearman', 'rusher', 'knight'], 
+              enemies: [{t:'zombie', x:0.7, y:0.2}, {t:'zombie', x:0.75, y:0.22}, {t:'zombie', x:0.8, y:0.2}, {t:'zombie', x:0.85, y:0.22}, {t:'skeleton', x:0.7, y:0.8}, {t:'skeleton', x:0.75, y:0.78}, {t:'skeleton', x:0.8, y:0.8}, {t:'skeleton', x:0.85, y:0.78}, {t:'necromancer', x:0.9, y:0.5}] },
+            { name: "The Power of Thunder", money: 1750, allowed: ['swordsman', 'shieldman', 'archer', 'spearman', 'rusher', 'zombie', 'skeleton', 'knight'], 
+              enemies: [{t:'shieldman', x:0.65, y:0.5}, {t:'tower', x:0.8, y:0.3}, {t:'tower', x:0.8, y:0.7}, {t:'necromancer', x:0.9, y:0.5}] },
+            { name: "The Giant", money: 1700, allowed: ['swordsman', 'shieldman', 'archer', 'spearman', 'rusher', 'zombie', 'skeleton', 'knight', 'necromancer', 'tower'], 
+              enemies: [{t:'shieldman', x:0.65, y:0.5}, {t:'giant', x:0.85, y:0.5}] },
+            { name: "Everyone, Assemble!", money: 6400, allowed: Object.keys(UNIT_DATA), 
+              enemies: ['swordsman', 'shieldman', 'archer', 'spearman', 'rusher', 'zombie', 'skeleton', 'knight', 'necromancer', 'tower', 'giant'].map((t, i) => ({t, x: 0.8, y: 0.1 + (i*0.08)})) }
+        ];
+
+        function resize() { width = canvas.width = window.innerWidth; height = canvas.height = window.innerHeight; }
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Unit {
+            constructor(x, y, team, type, isSummoned = false) {
+                this.spawnX = x; this.spawnY = y;
+                this.x = x; this.y = y;
+                this.team = team; this.type = type;
+                this.isSummoned = isSummoned;
+                this.dead = false; this.initStats();
+            }
+
+            initStats() {
+                const t = this.type;
+                this.stunTimer = 0; this.hasDodged = false; this.hasRevived = false;
+                this.dodgeTextTimer = 0; this.shield = 0; this.isRanged = false; this.immuneStun = false;
+                this.zombieTimer = 0; this.skeletonTimer = 0;
+
+                if(t==='swordsman') { this.hp=100; this.dmg=15; this.speed=4; this.range=40; this.cdMax=120; }
+                if(t==='shieldman') { this.hp=85; this.shield=125; this.dmg=4; this.speed=3; this.range=40; this.cdMax=120; }
+                if(t==='archer')    { this.hp=100; this.dmg=9; this.speed=2; this.range=360; this.cdMax=96; this.isRanged=true; }
+                if(t==='spearman')  { this.hp=90; this.dmg=12; this.speed=3; this.range=80; this.cdMax=132; }
+                if(t==='rusher')    { this.hp=85; this.dmg=4; this.speed=5; this.range=20; this.cdMax=36; }
+                if(t==='knight')    { this.hp=135; this.shield=50; this.dmg=18; this.speed=1.5; this.range=40; this.cdMax=150; }
+                if(t==='necromancer'){ this.hp=175; this.dmg=0; this.speed=1; this.range=300; this.cdMax=9999; }
+                if(t==='zombie')    { this.hp=100; this.dmg=6; this.speed=1; this.range=20; this.cdMax=90; this.immuneStun=true; }
+                if(t==='skeleton')  { this.hp=50; this.dmg=7; this.speed=1.25; this.range=30; this.cdMax=96; }
+                if(t==='tower')     { this.hp=150; this.dmg=20; this.speed=0; this.range=280; this.cdMax=150; this.immuneStun=true; }
+                if(t==='giant')     { this.hp=500; this.dmg=25; this.speed=1; this.range=50; this.cdMax=150; this.immuneStun=true; }
+                
+                this.maxHp = this.hp; this.initialShield = this.shield; this.cd = 0;
+            }
+
+            reset() { this.x = this.spawnX; this.y = this.spawnY; this.dead = false; this.initStats(); }
+
+            update() {
+                if (!isBattleStarted || this.dead) return;
+                if (this.stunTimer > 0) { this.stunTimer--; return; }
+
+                if (this.type === 'necromancer') {
+                    if(this.skeletonTimer <= 0) { this.summon('skeleton', 1); this.skeletonTimer = 38 * 60; }
+                    if(this.zombieTimer <= 0) { this.summon('zombie', 2); this.zombieTimer = 45 * 60; }
+                    this.zombieTimer--; this.skeletonTimer--;
+                }
+
+                let targets = units.filter(u => u.team !== this.team && !u.dead);
+                if (targets.length === 0) return;
+
+                targets.sort((a,b) => Math.hypot(a.x-this.x, a.y-this.y) - Math.hypot(b.x-this.x, b.y-this.y));
+                let nearest = targets[0];
+                let dist = Math.hypot(nearest.x-this.x, nearest.y-this.y);
+
+                if (dist <= this.range) {
+                    if (this.cd <= 0 && this.type !== 'necromancer') {
+                        this.performAttack(nearest, targets);
+                        this.cd = this.cdMax;
+                    }
+                } else if (this.speed > 0) {
+                    let angle = Math.atan2(nearest.y-this.y, nearest.x-this.x);
+                    this.x += Math.cos(angle) * this.speed;
+                    this.y += Math.sin(angle) * this.speed;
+                }
+                if (this.cd > 0) this.cd--;
+                if (this.dodgeTextTimer > 0) this.dodgeTextTimer--;
+            }
+
+            summon(type, count) {
+                for(let i=0; i<count; i++) {
+                    units.push(new Unit(this.x + (Math.random()*60-30), this.y + (Math.random()*60-30), this.team, type, true));
+                }
+            }
+
+            takeDamage(dmg, isRanged) {
+                if (this.dead) return;
+                if (this.type === 'rusher' && !this.hasDodged) { this.hasDodged = true; this.dodgeTextTimer = 40; return; }
+                if (this.type === 'skeleton' && isRanged) return;
+                
+                if (this.shield > 0) {
+                    this.shield -= dmg;
+                    if(this.shield < 0) { this.hp += this.shield; this.shield = 0; }
+                } else { this.hp -= dmg; }
+
+                if (this.hp <= 0) {
+                    if (this.type === 'zombie' && !this.hasRevived) { this.hp = this.maxHp * 0.35; this.hasRevived = true; }
+                    else { this.hp = 0; this.dead = true; }
+                }
+            }
+
+            performAttack(target, allTargets) {
+                if (this.type === 'tower') {
+                    this.strike(target, this.dmg, true);
+                    let second = allTargets[1];
+                    if (second && Math.hypot(second.x-this.x, second.y-this.y) <= this.range) {
+                        this.strike(second, 10, false);
+                        lightningLines.push({s: target, e: second, t: 10});
+                    }
+                    lightningLines.push({s: {x:this.x, y:this.y-20}, e: target, t: 10});
+                } else if (this.type === 'giant') {
+                    allTargets.slice(0, 3).forEach(t => {
+                        if(Math.hypot(t.x-this.x, t.y-this.y) <= this.range) {
+                            t.takeDamage(this.dmg, false);
+                            if(!t.immuneStun) { t.stunTimer = 30; t.x += (t.x-this.x)*0.2; t.y += (t.y-this.y)*0.2; }
+                        }
+                    });
+                } else { target.takeDamage(this.dmg, this.isRanged); }
+            }
+
+            strike(t, d, stun) { t.takeDamage(d, true); if(stun && !t.immuneStun) t.stunTimer = 90; }
+
+            draw() {
+                if (this.dead) return;
+                const teamCol = this.team === 'blue' ? '#38f' : '#f44';
+                const dir = this.team === 'blue' ? 1 : -1;
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+
+                if (['swordsman', 'zombie', 'skeleton'].includes(this.type)) {
+                    ctx.fillStyle = (this.type==='zombie') ? '#262' : (this.type==='skeleton'?'#eee':teamCol);
+                    ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                    if (this.type === 'swordsman') {
+                        ctx.fillStyle = '#aaa'; ctx.fillRect(8*dir, -2, 14*dir, 4);
+                        ctx.fillStyle = '#632'; ctx.fillRect(6*dir, -6, 4*dir, 12);
+                    }
+                } 
+                else if (['shieldman', 'spearman', 'knight'].includes(this.type)) {
+                    ctx.fillStyle = teamCol; ctx.fillRect(-12, -12, 24, 24); ctx.strokeRect(-12, -12, 24, 24);
+                    if(this.type === 'shieldman') {
+                        ctx.fillStyle = '#555'; ctx.fillRect(8*dir, -14, 6*dir, 28);
+                    } else if (this.type === 'spearman') {
+                        ctx.fillStyle = '#632'; ctx.fillRect(0, -2, 30*dir, 4);
+                        ctx.fillStyle = '#aaa'; ctx.beginPath(); ctx.moveTo(30*dir,-4); ctx.lineTo(40*dir,0); ctx.lineTo(30*dir,4); ctx.fill();
+                    } else if(this.type==='knight') { ctx.fillStyle='#777'; ctx.fillRect(-12, -12, 24, 8); }
+                } 
+                else if (['archer', 'rusher', 'necromancer'].includes(this.type)) {
+                    if (this.type === 'rusher') {
+                        ctx.fillStyle = '#111'; ctx.beginPath(); ctx.moveTo(0, -18); ctx.lineTo(16, 12); ctx.lineTo(-16, 12); ctx.closePath(); ctx.fill();
+                        ctx.fillStyle = '#888'; ctx.fillRect(8*dir, 4, 8*dir, 3);
+                    }
+                    ctx.fillStyle = teamCol; ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(13, 10); ctx.lineTo(-13, 10); ctx.closePath(); ctx.fill(); ctx.stroke();
+                    if (this.type === 'archer') {
+                        ctx.strokeStyle = '#632'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(10*dir, 0, 15, Math.PI*1.2, Math.PI*2.8, dir===-1); ctx.stroke();
+                    } else if(this.type==='necromancer') { ctx.fillStyle='#000'; ctx.fillRect(-10, -18, 20, 4); ctx.fillRect(-5, -25, 10, 8); }
+                } 
+                else if (this.type === 'tower') {
+                    ctx.fillStyle='#555'; ctx.fillRect(-10, -20, 20, 40);
+                    ctx.fillStyle='yellow'; ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI*2); ctx.fill();
+                } else if (this.type === 'giant') {
+                    ctx.fillStyle = teamCol; ctx.fillRect(-25, -25, 50, 50); ctx.strokeRect(-25, -25, 50, 50);
+                    ctx.fillStyle='#642'; ctx.fillRect(20*dir, -30, 10*dir, 40);
+                }
+                if (this.dodgeTextTimer > 0) { ctx.fillStyle='#fff'; ctx.fillText("DODGES", -20, -30); }
+                ctx.restore();
+                this.drawHP();
+            }
+
+            drawHP() {
+                if (this.dead) return;
+                let w = 30, h = 4;
+                ctx.fillStyle = 'red'; ctx.fillRect(this.x-w/2, this.y-25, w, h);
+                ctx.fillStyle = '#0f0'; ctx.fillRect(this.x-w/2, this.y-25, w*(this.hp/this.maxHp), h);
+                if(this.shield > 0) { ctx.fillStyle='cyan'; ctx.fillRect(this.x-w/2, this.y-29, w*(this.shield/this.initialShield), h); }
+            }
+        }
+
+        // --- Core Logic ---
+        function setTool(t) {
+            currentTool = t;
+            document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('btn-' + t).classList.add('active');
+        }
+
+        function canPlace(x, y) {
+            return !units.some(u => Math.hypot(u.x - x, u.y - y) < 25);
+        }
+
+        function enterSandbox() {
+            isSandbox = true; currentLevel = null; wallet = Infinity;
+            document.getElementById('menu').style.display='none';
+            document.getElementById('sidebar').style.display='flex';
+            document.querySelectorAll('.btn').forEach(b => b.classList.add('visible'));
+            updateMoneyUI(); 
+            // Start loop if not already running
+            if(!window.isLoopRunning) { gameLoop(); window.isLoopRunning = true; }
+        }
+
+        function openLevelSelect() {
+            document.getElementById('menu').style.display='none';
+            const select = document.getElementById('level-select');
+            select.style.display='flex';
+            const container = document.getElementById('level-buttons');
+            container.innerHTML = '';
+            
+            LEVELS.forEach((l, i) => {
+                const btn = document.createElement('div');
+                const isLocked = (i + 1) > unlockedLevels;
+                btn.className = 'menu-btn' + (isLocked ? ' locked' : '');
+                btn.innerText = (isLocked ? "LOCKED: " : "") + `Level ${i+1}: ${l.name}`;
+                if(!isLocked) btn.onclick = () => startLevel(i);
+                container.appendChild(btn);
+            });
+        }
+
+        function startLevel(idx) {
+            isSandbox = false; currentLevel = idx; 
+            const level = LEVELS[idx];
+            wallet = level.money;
+            units = [];
+            level.enemies.forEach(e => units.push(new Unit(e.x * width, e.y * height, 'red', e.t)));
+            
+            document.getElementById('level-select').style.display='none';
+            document.getElementById('sidebar').style.display='flex';
+            document.getElementById('level-name-display').innerText = level.name;
+            document.querySelectorAll('.btn').forEach(b => b.classList.remove('visible'));
+            level.allowed.forEach(id => {
+                const b = document.getElementById('btn-'+id);
+                if(b) b.classList.add('visible');
+            });
+            
+            updateMoneyUI();
+            if(!window.isLoopRunning) { gameLoop(); window.isLoopRunning = true; }
+        }
+
+        function updateMoneyUI() {
+            document.getElementById('money-display').innerText = `Money: ${wallet === Infinity ? '∞' : '$' + wallet}`;
+        }
+
+        function startBattle() { 
+            if(units.filter(u=>u.team==='blue').length > 0) {
+                isBattleStarted = true;
+                document.getElementById('start-btn').style.display='none';
+                document.getElementById('end-btn').style.display='block';
+            }
+        }
+
+        function endBattle() {
+            isBattleStarted = false;
+            document.getElementById('start-btn').style.display='block';
+            document.getElementById('end-btn').style.display='none';
+            units = units.filter(u => !u.isSummoned);
+            units.forEach(u => u.reset());
+        }
+
+        function loadNextLevel() {
+            document.getElementById('victory-overlay').style.display = 'none';
+            document.getElementById('next-lvl-btn').style.display = 'none';
+            startLevel(currentLevel + 1);
+        }
+
+        function backToMenu() {
+            location.reload();
+        }
+
+        canvas.addEventListener('mousedown', e => {
+            const x = e.clientX, y = e.clientY;
+            if(x < 220 || isBattleStarted) return;
+
+            if(currentTool === 'delete') {
+                const target = units.find(u => Math.hypot(u.x-x, u.y-y) < 20 && (isSandbox || u.team === 'blue'));
+                if(target) {
+                    if(!isSandbox) wallet += UNIT_DATA[target.type].cost;
+                    units = units.filter(u => u !== target);
+                    updateMoneyUI();
+                }
+            } else {
+                const cost = UNIT_DATA[currentTool].cost;
+                const canSpawnInSandbox = isSandbox;
+                const canSpawnInCampaign = !isSandbox && wallet >= cost && x < width/2;
+
+                if((canSpawnInSandbox || canSpawnInCampaign) && canPlace(x, y)) {
+                    const spawnTeam = (isSandbox && x > width/2) ? 'red' : 'blue';
+                    units.push(new Unit(x, y, spawnTeam, currentTool));
+                    if(!isSandbox) wallet -= cost;
+                    updateMoneyUI();
+                }
+            }
+        });
+
+        function gameLoop() {
+            ctx.fillStyle = '#111'; ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = 'rgba(0,0,255,0.03)'; ctx.fillRect(0,0,width/2,height);
+            ctx.fillStyle = 'rgba(255,0,0,0.03)'; ctx.fillRect(width/2,0,width/2,height);
+
+            lightningLines = lightningLines.filter(l => {
+                ctx.strokeStyle = 'yellow'; ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(l.s.x, l.s.y); ctx.lineTo(l.e.x, l.e.y); ctx.stroke();
+                return --l.t > 0;
+            });
+
+            let b=0, r=0;
+            units.forEach((u) => {
+                u.update(); u.draw();
+                if(!u.dead) { if(u.team==='blue') b++; else r++; }
+            });
+
+            if(isBattleStarted && (b===0 || r===0)) {
+                const win = b > 0;
+                const ov = document.getElementById('victory-overlay');
+                const txt = document.getElementById('victory-text');
+                txt.innerText = win ? "VICTORY!" : "DEFEAT!";
+                txt.style.color = win ? '#0f0' : '#f44';
+                ov.style.display = 'block';
+                
+                isBattleStarted = false;
+
+                if(win && !isSandbox) {
+                    // Fix: Ensure we unlock the next level and save it
+                    if (currentLevel + 1 >= unlockedLevels) {
+                        unlockedLevels = currentLevel + 2; 
+                        saveProgress();
+                    }
+                    if(currentLevel < LEVELS.length - 1) document.getElementById('next-lvl-btn').style.display = 'block';
+                } else {
+                    setTimeout(() => { ov.style.display='none'; endBattle(); }, 2000);
+                }
+            }
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
